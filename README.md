@@ -4,6 +4,12 @@
 
 ShadowSphere is a privacy-first social platform built with the Leo programming language on the **Aleo blockchain**. It enables anonymous social interactions, private messaging, and value transfers—all while preserving user privacy through zero-knowledge cryptography.
 
+## Testnet DEPLOYMENT ID
+Deployed Program: `shadowsphere_social9.aleo`
+
+Transaction ID: `
+at18a082xh7mejrg3w4q9uvcpep43hsf5kw36mhey5uhcy38hfa7yzsvwzg30`
+
 [![Aleo](https://img.shields.io/badge/Aleo-Built%20on%20Aleo-blue)](https://aleo.org)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 [![Testnet](https://img.shields.io/badge/Testnet-Deployed-orange)](https://testnet.explorer.provable.com/program/shadowsphere_social9.aleo)
