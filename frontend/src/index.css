@@ -1,0 +1,74 @@
+@import "tailwindcss";
+
+/* =========================
+   ShadowSphere Design Tokens
+   ========================= */
+
+@theme {
+    --color-background: #0b0f17;
+    --color-surface: #111827;
+    --color-muted: #1f2937;
+    --color-border: #1f2a37;
+
+    --color-primary: #6d5df6;
+    --color-primary-hover: #5b4be0;
+
+    --color-success: #22c55e;
+    --color-warning: #f59e0b;
+    --color-danger: #ef4444;
+
+    --color-text-primary: #f9fafb;
+    --color-text-secondary: #9ca3af;
+
+    --radius-xl: 1rem;
+    --radius-2xl: 1.5rem;
+}
+
+/* =========================
+   Global Base Styling
+   ========================= */
+
+html,
+body,
+#root {
+    height: 100%;
+}
+
+body {
+    background-color: var(--color-background);
+    color: var(--color-text-primary);
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+}
+/* Ensure the Aleo Wallet Modal sits on top of everything */
+.aleo-wallet-modal {
+    z-index: 9999 !important;
+}
+
+/* Sometimes the backdrop/overlay needs a boost too */
+.aleo-wallet-modal-overlay {
+    z-index: 9998 !important;
+}
+/* Scrollbar */
+::-webkit-scrollbar {
+    width: 6px;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--color-muted);
+    border-radius: 9999px;
+}
+@layer components {
+    .card {
+        @apply bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[var(--radius-2xl)] p-5;
+    }
+
+    .btn-primary {
+        @apply px-4 py-2 rounded-[var(--radius-xl)] text-white transition;
+        background-color: var(--color-primary);
+    }
+
+    .btn-primary:hover {
+        background-color: var(--color-primary-hover);
+    }
+}

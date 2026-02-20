@@ -1,0 +1,6 @@
+export const ALEO_CONFIG = {
+  PROGRAM_ID_TESTNET: import.meta.env.VITE_ALEO_PROGRAM_ID_TESTNET,
+  PROGRAM_ID_MAINNET: import.meta.env.VITE_ALEO_PROGRAM_ID_MAINNET,
+  DEPOSIT_FEE: Number(import.meta.env.VITE_ALEO_DEPOSIT_FEE || 100000),
+  TOKEN_DECIMALS: Number(import.meta.env.VITE_TOKEN_DECIMALS || 6),
+};
