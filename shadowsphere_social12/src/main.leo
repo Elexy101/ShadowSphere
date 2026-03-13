@@ -2,7 +2,7 @@
 // Private, decentralized social platform with USDCx integration
 import test_usdcx_stablecoin.aleo;
 
-program shadowsphere_social12.aleo {
+program shadowsphere_social16.aleo {
     @noupgrade
     async constructor() {}
 
@@ -10,8 +10,9 @@ program shadowsphere_social12.aleo {
     // DATA STRUCTURES
     // ==============================================
 
+    // Privacy: Removed 'public_key' from struct.
+    // The mapping key (hashed address) acts as the identity.
     struct UserProfile {
-        public_key: address,
         reputation: u32,
         created_at: u32,
         is_verified: bool,
@@ -21,7 +22,8 @@ program shadowsphere_social12.aleo {
 
     struct Post {
         post_id: u32,
-        author: address,
+        // Privacy: Author is stored as a hash
+        author_hash: field, 
         content_hash: field,
         timestamp: u32,
         likes: u32,
@@ -33,14 +35,14 @@ program shadowsphere_social12.aleo {
     struct Comment {
         comment_id: u32,
         post_id: u32,
-        author: address,
+        author_hash: field,
         content_hash: field,
         timestamp: u32
     }
 
     struct Friendship {
-        user_a: address,
-        user_b: address,
+        user_a_hash: field,
+        user_b_hash: field,
         status: u8,
         since: u32
     }
@@ -58,8 +60,8 @@ program shadowsphere_social12.aleo {
     record GiftReceipt {
         owner: address,
         gift_id: field,
-        sender: address,
-        receiver: address,
+        sender_hash: field, // Anonymized sender
+        receiver: address,  // Receiver needs to be address to receive tokens
         amount: u128,
         message_hash: field,
         timestamp: u32,
@@ -74,37 +76,41 @@ program shadowsphere_social12.aleo {
     record FriendKey {
         owner: address,
         key_id: field,
-        from: address,
-        to: address
+        from_hash: field,
+        to_hash: field
     }
 
     // ==============================================
     // STORAGE MAPPINGS
     // ==============================================
 
-    mapping users: address => UserProfile;
+    // Privacy: Keys are now hashed fields, not addresses
+    mapping users: field => UserProfile;
     mapping posts: u32 => Post;
     mapping comments: u32 => Comment;
     mapping friendships: field => Friendship;
     
-    mapping user_posts: address => u32;
-    mapping post_comments: u32 => u32;
-    mapping user_activity: address => u32;
-    mapping message_activity: address => u32;
+    // Privacy: Tracking counts by hash
+    mapping user_post_counts: field => u32; 
+    mapping post_comment_counts: u32 => u32;
+    
+    mapping user_activity: field => u32;
+    mapping message_activity: field => u32;
     
     mapping total_users: u32 => u32;
     mapping total_posts: u32 => u32;
     mapping total_comments: u32 => u32;
+
+    mapping post_likes: field => bool;  
 
     // ==============================================
     // CONSTANTS
     // ==============================================
 
     const ADMIN: address = aleo1f5enhpxfz3l3pqyh8k9d5xkqu0njv27xp5sv4nedarrk3nrgnuzqm3pp9h;
-    const PLATFORM_FEE: u8 = 2u8;
+    const PLATFORM_FEE: u128 = 100000u128;
     const MIN_DEPOSIT: u128 = 1000000u128;
     const VERIFICATION_THRESHOLD: u32 = 100u32;
-    //const DEFAULT_TIMESTAMP: u32 = 0u32;y
 
     // ==============================================
     // USER REGISTRATION & LOGIN
@@ -112,69 +118,58 @@ program shadowsphere_social12.aleo {
 
     async transition register(
     ) -> (UserSecret, Future) {
-
-        //checks for self.caller
         let caller: address = self.caller;
+        let caller_hash: field = BHP256::hash_to_field(caller as field);
         
         return (UserSecret {
             owner: caller,
-            identity_hash: BHP256::hash_to_field(caller as field)
-        }, finalize_registration(caller));
+            identity_hash: caller_hash
+        }, finalize_registration(caller_hash));
     }
 
+    // Privacy: Finalize takes 'field' (hash), not 'address'
     async function finalize_registration(
-        caller: address
+        caller_hash: field
     ) {
         let user_count: u32 = Mapping::get_or_use(total_users, 0u32, 0u32);
         Mapping::set(total_users, 0u32, user_count + 1u32);
 
-        let profile: UserProfile = Mapping::get_or_use(users, caller, UserProfile{
-            public_key: caller,
+        let profile: UserProfile = Mapping::get_or_use(users, caller_hash, UserProfile{
             reputation: 0u32,
-            created_at: block.height,
+            created_at: 0u32,
             is_verified: false,
             is_registered: false,
             balance: 0u128
         });
 
-        //checks  for  double registration
         assert(profile.is_registered == false);
 
-        Mapping::set(users, profile.public_key, UserProfile {
-            public_key: caller,
+        Mapping::set(users, caller_hash, UserProfile {
             reputation: 0u32,
             created_at: block.height,
             is_verified: false,
             is_registered: true,
             balance: 0u128
         });
-        Mapping::set(user_activity, profile.public_key, block.height);
+        Mapping::set(user_activity, caller_hash, block.height);
     }
 
-    // 🔐 Login verification
     async transition verify_login(
         identity_hash: field
     ) -> Future {
         let caller: address = self.caller; 
-
         let computed_identity: field = BHP256::hash_to_field(caller as field);
-
-        // Verify the identity matches
-        let is_correct: bool = (computed_identity == identity_hash);
-        assert(is_correct);
+        assert(computed_identity == identity_hash);
     
-        return finalize_verify_login(self.caller);
+        return finalize_verify_login(identity_hash);
     }
 
     async function finalize_verify_login(
-        user: address
+        user_hash: field
     ) {
-        // Get user profile
-        let profile: UserProfile = Mapping::get(users, user);
+        let profile: UserProfile = Mapping::get(users, user_hash);
         assert(profile.is_registered == true);
-    
-        // Update last login activity
-        Mapping::set(user_activity, user, block.height);
+        Mapping::set(user_activity, user_hash, block.height);
     }
 
 
@@ -184,20 +179,20 @@ program shadowsphere_social12.aleo {
 
     async transition deposit(amount: u128) -> Future {
         let caller: address = self.caller;
-        assert(amount >= MIN_DEPOSIT);
+        let caller_hash: field = BHP256::hash_to_field(caller as field);
         
+        assert(amount >= MIN_DEPOSIT);
         let deposit_future: Future = test_usdcx_stablecoin.aleo/transfer_public_as_signer(self.address, amount);
-        return finalize_deposit(caller, amount, deposit_future);
+        return finalize_deposit(caller_hash, amount, deposit_future);
     }
 
-    async function finalize_deposit(caller: address, amount: u128, deposit_future: Future) {
+    async function finalize_deposit(caller_hash: field, amount: u128, deposit_future: Future) {
         deposit_future.await();
         
-        let user: UserProfile = Mapping::get(users, caller);
+        let user: UserProfile = Mapping::get(users, caller_hash);
         let new_balance: u128 = user.balance + amount;
         
-        Mapping::set(users, caller, UserProfile {
-            public_key: user.public_key,
+        Mapping::set(users, caller_hash, UserProfile {
             reputation: user.reputation,
             created_at: user.created_at,
             is_verified: user.is_verified,
@@ -208,27 +203,25 @@ program shadowsphere_social12.aleo {
 
     async transition withdraw(amount: u128) -> Future {
         let caller: address = self.caller;
+        let caller_hash: field = BHP256::hash_to_field(caller as field);
         
         let withdraw_future: Future = test_usdcx_stablecoin.aleo/transfer_public(caller, amount);
-        return finalize_withdraw(caller, amount, withdraw_future);
+        return finalize_withdraw(caller_hash, amount, withdraw_future);
     }
 
-    async function finalize_withdraw(caller: address, amount: u128, withdraw_future: Future) {
-        withdraw_future.await();
-        
-        let user: UserProfile = Mapping::get(users, caller);
+    async function finalize_withdraw(caller_hash: field, amount: u128, withdraw_future: Future) {
+        let user: UserProfile = Mapping::get(users, caller_hash);
         assert(user.balance >= amount);
         
-        // Update balance first
-        Mapping::set(users, caller, UserProfile {
-            public_key: user.public_key,
+        withdraw_future.await();
+        
+        Mapping::set(users, caller_hash, UserProfile {
             reputation: user.reputation,
             created_at: user.created_at,
             is_verified: user.is_verified,
             is_registered: user.is_registered,
             balance: user.balance - amount
         });
-
     } 
 
     // ==============================================
@@ -241,31 +234,32 @@ program shadowsphere_social12.aleo {
         public category: u8
     ) -> Future {
         let caller: address = self.caller;
+        let caller_hash: field = BHP256::hash_to_field(caller as field);
         
-        return finalize_create_post(caller, content_hash, encrypted, category);
+        return finalize_create_post(caller_hash, content_hash, encrypted, category);
     }
 
     async function finalize_create_post(
-        author: address,
+        author_hash: field,
         content_hash: field,
         encrypted: bool,
         category: u8
     ) {
-        // Get caller's username
-        let profile: UserProfile = Mapping::get(users, author);
+        let profile: UserProfile = Mapping::get(users, author_hash);
         assert(profile.is_registered == true);
 
-        //Check input validations
-        assert(category <= 10u8); // Max 10 categories
+        assert(category <= 10u8); 
         assert(content_hash != 0field);
 
         let post_id: u32 = Mapping::get_or_use(total_posts, 0u32, 0u32) + 1u32;
         Mapping::set(total_posts, 0u32, post_id);
-        Mapping::set(user_posts, author, post_id);
+        
+        let current_count: u32 = Mapping::get_or_use(user_post_counts, author_hash, 0u32);
+        Mapping::set(user_post_counts, author_hash, current_count + 1u32);
 
         let post: Post = Post {
             post_id: post_id,
-            author: author,
+            author_hash: author_hash,
             content_hash: content_hash,
             timestamp: block.height,
             likes: 0u32,
@@ -274,37 +268,39 @@ program shadowsphere_social12.aleo {
             category: category
         };
 
-        //check post existence
-        assert(post.post_id != 0u32);
-
         Mapping::set(posts, post_id, post);
         
-        let user: UserProfile = Mapping::get(users, author);
-        Mapping::set(users, author, UserProfile {
-            public_key: user.public_key,
-            reputation: user.reputation + 3u32,
-            created_at: user.created_at,
-            is_verified: user.is_verified,
-            is_registered: user.is_registered,
-            balance: user.balance
+        Mapping::set(users, author_hash, UserProfile {
+            reputation: profile.reputation + 3u32,
+            created_at: profile.created_at,
+            is_verified: profile.is_verified,
+            is_registered: profile.is_registered,
+            balance: profile.balance
         });
     }
 
     async transition like_post(post_id: u32) -> Future {
         let caller: address = self.caller;
-        return finalize_like_post(caller, post_id);
+        let caller_hash: field = BHP256::hash_to_field(caller as field);
+        return finalize_like_post(caller_hash, post_id);
     }
 
-    async function finalize_like_post(caller: address, post_id: u32) {
-        // Get caller's username
-        let profile: UserProfile = Mapping::get(users, caller);
+    async function finalize_like_post(caller_hash: field, post_id: u32) {
+        let profile: UserProfile = Mapping::get(users, caller_hash);
         assert(profile.is_registered == true);
+
+        let like_key: field = BHP256::hash_to_field(post_id as field + caller_hash);
+        let already_liked: bool = Mapping::get_or_use(post_likes, like_key, false);
+        assert(already_liked == false); 
 
         let post: Post = Mapping::get(posts, post_id);
         
+        // Privacy: We can update the author's reputation using their hash found in the post
+        let author_hash: field = post.author_hash;
+        
         Mapping::set(posts, post_id, Post {
             post_id: post.post_id,
-            author: post.author,
+            author_hash: author_hash,
             content_hash: post.content_hash,
             timestamp: post.timestamp,
             likes: post.likes + 1u32,
@@ -313,9 +309,8 @@ program shadowsphere_social12.aleo {
             category: post.category
         });
 
-        let author_user: UserProfile = Mapping::get(users, post.author);
-        Mapping::set(users, post.author, UserProfile {
-            public_key: author_user.public_key,
+        let author_user: UserProfile = Mapping::get(users, author_hash);
+        Mapping::set(users, author_hash, UserProfile {
             reputation: author_user.reputation + 1u32,
             created_at: author_user.created_at,
             is_verified: author_user.is_verified,
@@ -329,28 +324,29 @@ program shadowsphere_social12.aleo {
         public content_hash: field
     ) -> Future {
         let caller: address = self.caller;
+        let caller_hash: field = BHP256::hash_to_field(caller as field);
         
-        return finalize_add_comment(caller, post_id, content_hash);
+        return finalize_add_comment(caller_hash, post_id, content_hash);
     }
 
     async function finalize_add_comment(
-        author: address,
+        author_hash: field,
         post_id: u32,
         content_hash: field
     ) {   
-
-        let user: UserProfile = Mapping::get(users, author);
+        let user: UserProfile = Mapping::get(users, author_hash);
         assert(user.is_registered == true);   
 
         let comment_id: u32 = Mapping::get_or_use(total_comments, 0u32, 0u32) + 1u32;
-
         Mapping::set(total_comments, 0u32, comment_id);
-        Mapping::set(post_comments, post_id, comment_id);
+
+        let comment_count: u32 = Mapping::get_or_use(post_comment_counts, post_id, 0u32);
+        Mapping::set(post_comment_counts, post_id, comment_count + 1u32);
 
         let comment: Comment = Comment {
             comment_id: comment_id,
             post_id: post_id,
-            author: author,
+            author_hash: author_hash,
             content_hash: content_hash,
             timestamp: block.height
         };
@@ -360,7 +356,7 @@ program shadowsphere_social12.aleo {
         let post: Post = Mapping::get(posts, post_id);
         Mapping::set(posts, post_id, Post {
             post_id: post.post_id,
-            author: post.author,
+            author_hash: post.author_hash,
             content_hash: post.content_hash,
             timestamp: post.timestamp,
             likes: post.likes,
@@ -369,14 +365,12 @@ program shadowsphere_social12.aleo {
             category: post.category
         });
 
-        let commenter: UserProfile = Mapping::get(users, author);
-        Mapping::set(users, author, UserProfile {
-            public_key: commenter.public_key,
-            reputation: commenter.reputation + 2u32,
-            created_at: commenter.created_at,
-            is_verified: commenter.is_verified,
-            is_registered: commenter.is_registered,
-            balance: commenter.balance
+        Mapping::set(users, author_hash, UserProfile {
+            reputation: user.reputation + 2u32,
+            created_at: user.created_at,
+            is_verified: user.is_verified,
+            is_registered: user.is_registered,
+            balance: user.balance
         });
     }
 
@@ -390,9 +384,10 @@ program shadowsphere_social12.aleo {
         private timer: u32
     ) -> (PrivateMessage, PrivateMessage, Future) {
         let sender: address = self.caller;
+        let sender_hash: field = BHP256::hash_to_field(sender as field);
+        let receiver_hash: field = BHP256::hash_to_field(receiver as field);
 
-        //generate the message id
-        let message_id: field = BHP256::hash_to_field(sender as field + receiver as field + content_hash +  timer as field);
+        let message_id: field = BHP256::hash_to_field(sender_hash + receiver_hash + content_hash +  timer as field);
         
         let sender_message: PrivateMessage = PrivateMessage {
             owner: sender,
@@ -414,23 +409,21 @@ program shadowsphere_social12.aleo {
             read: false
         };
         
-        return (sender_message, receiver_message, finalize_send_message(sender, receiver));
+        return (sender_message, receiver_message, finalize_send_message(sender_hash, receiver_hash));
     }
 
     async function finalize_send_message(
-        sender: address,
-        receiver: address,
+        sender_hash: field,
+        receiver_hash: field
     ) {
-        // Get caller's username
-        let profile: UserProfile = Mapping::get(users, sender);
+        let profile: UserProfile = Mapping::get(users, sender_hash);
         assert(profile.is_registered == true); 
-
-        Mapping::set(message_activity, sender, block.height);
-        Mapping::set(message_activity, receiver, block.height);
+        Mapping::set(message_activity, sender_hash, block.height);
+        Mapping::set(message_activity, receiver_hash, block.height);
     }
 
     // ==============================================
-    // GIFT SYSTEM - AWESOME AND SIMPLE
+    // GIFT SYSTEM
     // ==============================================
 
     async transition send_gift(
@@ -440,19 +433,16 @@ program shadowsphere_social12.aleo {
         public timer: u32,
     ) -> (GiftReceipt, GiftReceipt, Future) {
         let sender: address = self.caller;
-        
-        assert(amount > 0u128);
+        let sender_hash: field = BHP256::hash_to_field(sender as field);
 
-        //generate the gift id
-        let gift_id: field = BHP256::hash_to_field(sender as field + receiver as field + amount as field + message_hash);
+        let gift_id: field = BHP256::hash_to_field(sender_hash + BHP256::hash_to_field(receiver as field) + amount as field + message_hash);
     
-        let fee: u128 = 100000u128; //0.1 usdcx fee for every gift transaction
-        let net_amount: u128 = amount - fee;
+        let net_amount: u128 = amount;
         
         let sender_receipt: GiftReceipt = GiftReceipt {
             owner: sender,
             gift_id: gift_id,
-            sender: sender,
+            sender_hash: sender_hash,
             receiver: receiver,
             amount: net_amount,
             message_hash: message_hash,
@@ -463,7 +453,7 @@ program shadowsphere_social12.aleo {
         let receiver_receipt: GiftReceipt = GiftReceipt {
             owner: receiver,
             gift_id: gift_id,
-            sender: sender,
+            sender_hash: sender_hash,
             receiver: receiver,
             amount: net_amount,
             message_hash: message_hash,
@@ -471,40 +461,31 @@ program shadowsphere_social12.aleo {
             claimed: false
         };
         
-        let transfer_to_receiver: Future = test_usdcx_stablecoin.aleo/transfer_public_as_signer(receiver, net_amount);
-        let transfer_to_admin: Future = test_usdcx_stablecoin.aleo/transfer_public_as_signer(ADMIN, fee);
+        let final_transfer_amt: u128 = amount - PLATFORM_FEE;
         
-        return (sender_receipt, receiver_receipt, finalize_receiver_withdraw(sender, receiver, amount, net_amount, transfer_to_receiver, transfer_to_admin));
+        let transfer_to_receiver: Future = test_usdcx_stablecoin.aleo/transfer_public_as_signer(receiver, final_transfer_amt);
+        let transfer_to_admin: Future = test_usdcx_stablecoin.aleo/transfer_public_as_signer(ADMIN, PLATFORM_FEE);
+        
+        return (sender_receipt, receiver_receipt, finalize_send_gift(sender_hash, amount, final_transfer_amt, transfer_to_receiver, transfer_to_admin));
     }
 
-    async function finalize_receiver_withdraw(sender: address, receiver: address, amount: u128, net_amount: u128, transfer_to_receiver: Future, transfer_to_admin: Future) {
-        // Get caller's username
-        let profile: UserProfile = Mapping::get(users, sender);
+    async function finalize_send_gift(sender_hash: field, gross_amount: u128, net_amount: u128, transfer_to_receiver: Future, transfer_to_admin: Future) {
+        let profile: UserProfile = Mapping::get(users, sender_hash);
         assert(profile.is_registered == true);
 
-        //To avoid double-spending...
+        assert(profile.balance >= gross_amount);
+        assert(profile.balance >= gross_amount + PLATFORM_FEE);
+
         transfer_to_receiver.await();
         transfer_to_admin.await();
        
-        // Update sender balance
-        Mapping::set(users, sender, UserProfile {
-            public_key: profile.public_key,
+        // Deduct from internal balance using only the hash
+        Mapping::set(users, sender_hash, UserProfile {
             reputation: profile.reputation + 5u32,
             created_at: profile.created_at,
             is_verified: profile.is_verified,
             is_registered: profile.is_registered,
-            balance: profile.balance - amount
-        });
-        
-        // Update receiver balance
-        let receiver_user: UserProfile = Mapping::get(users, receiver);
-        Mapping::set(users, receiver, UserProfile {
-            public_key: receiver_user.public_key,
-            reputation: receiver_user.reputation + 3u32,
-            created_at: receiver_user.created_at,
-            is_verified: receiver_user.is_verified,
-            is_registered: receiver_user.is_registered,
-            balance: receiver_user.balance + net_amount
+            balance: profile.balance - gross_amount
         });
     }
 
@@ -518,7 +499,7 @@ program shadowsphere_social12.aleo {
         return (GiftReceipt {
             owner: gift_receipt.owner,
             gift_id: gift_receipt.gift_id,
-            sender: gift_receipt.sender,
+            sender_hash: gift_receipt.sender_hash,
             receiver: gift_receipt.receiver,
             amount: gift_receipt.amount,
             message_hash: gift_receipt.message_hash,
@@ -528,87 +509,89 @@ program shadowsphere_social12.aleo {
     }
 
     // ==============================================
-    // FRIENDSHIP (Using username)
+    // FOLLOWER / FRIENDSHIP
     // ==============================================
 
     async transition add_friend(public friend: address) -> (FriendKey,  FriendKey, Future) {
         let caller: address = self.caller;
+        let caller_hash: field = BHP256::hash_to_field(caller as field);
+        let friend_hash: field = BHP256::hash_to_field(friend as field);
 
-        // Create consistent key
-        let key: field = BHP256::hash_to_field(caller as field + friend as field);
+        // Using ternary operator for ordering
+        let hash_a: field = caller_hash < friend_hash ? caller_hash : friend_hash;
+        let hash_b: field = caller_hash < friend_hash ? friend_hash : caller_hash;
+        let key: field = BHP256::hash_to_field(hash_a + hash_b);
         
         let send_request: FriendKey = FriendKey {
             owner: caller,
             key_id: key,
-            from: self.caller,
-            to: friend,
+            from_hash: caller_hash,
+            to_hash: friend_hash,
         };
         
         let receive_request: FriendKey = FriendKey {
             owner: friend,
             key_id: key,
-            from: friend,
-            to: caller,
+            from_hash: caller_hash,
+            to_hash: friend_hash,
         };
         
-        return (send_request, receive_request, finalize_add_friend(caller, friend));
+        return (send_request, receive_request, finalize_add_friend(caller_hash, friend_hash));
     }
 
-    async function finalize_add_friend(caller: address, friend: address) {        
-        // Get caller's username
-        let profile: UserProfile = Mapping::get(users, caller);
+    async function finalize_add_friend(caller_hash: field, friend_hash: field) {        
+        let profile: UserProfile = Mapping::get(users, caller_hash);
         assert(profile.is_registered == true);
-        
-        // Can't friend yourself
-        assert(profile.public_key != friend);
+        assert(caller_hash != friend_hash);
 
-        // Create consistent key
-        let key: field = BHP256::hash_to_field(caller as field + friend as field);
+        // Using ternary operator for ordering
+        let hash_a: field = caller_hash < friend_hash ? caller_hash : friend_hash;
+        let hash_b: field = caller_hash < friend_hash ? friend_hash : caller_hash;
+        let key: field = BHP256::hash_to_field(hash_a + hash_b);
         
-        // Check if relationship already exists
         let existing: Friendship = Mapping::get_or_use(friendships, key, Friendship {
-        user_a: caller,
-        user_b: friend,
-        status: 0u8,
-        since: 0u32
-    });
+            user_a_hash: 0field,
+            user_b_hash: 0field,
+            status: 0u8,
+            since: 0u32
+        });
+
         assert(existing.status == 0u8);
         
-        // Create friendship
         let friendship: Friendship = Friendship {
-            user_a: caller,
-            user_b: friend,
-            status: 1u8,    // 1 = friends
+            user_a_hash: hash_a,
+            user_b_hash: hash_b,
+            status: 1u8,    
             since: block.height
         };
         
         Mapping::set(friendships, key, friendship);
-        Mapping::set(user_activity, caller, block.height);
-        Mapping::set(user_activity, friend, block.height);
+        Mapping::set(user_activity, caller_hash, block.height);
+        Mapping::set(user_activity, friend_hash, block.height);
     }
 
     async transition block_user(public user_to_block: address) -> Future {
         let caller: address = self.caller;
+        let caller_hash: field = BHP256::hash_to_field(caller as field);
+        let block_hash: field = BHP256::hash_to_field(user_to_block as field);
                 
-        return finalize_block_user(caller, user_to_block);
+        return finalize_block_user(caller_hash, block_hash);
     }
 
-    async function finalize_block_user(caller: address, user_to_block: address) {
-        // Get caller's username
-        let profile: UserProfile = Mapping::get(users, caller);
+    async function finalize_block_user(caller_hash: field, block_hash: field) {
+        let profile: UserProfile = Mapping::get(users, caller_hash);
         assert(profile.is_registered == true);
-        
-        // Can't block yourself
-        assert(profile.public_key != user_to_block);
+        assert(caller_hash != block_hash);
 
-        // Create consistent key
-        let key: field = BHP256::hash_to_field(caller as field + user_to_block as field);
+        // Using ternary operator for ordering
+        let hash_a: field = caller_hash < block_hash ? caller_hash : block_hash;
+        let hash_b: field = caller_hash < block_hash ? block_hash : caller_hash;
+        let key: field = BHP256::hash_to_field(hash_a + hash_b);
         
-        // Create/update block relationship
         let friendship: Friendship = Friendship {
-            user_a: caller,
-            user_b: user_to_block,
-            status: 2u8,    // 2 = blocked
+            user_a_hash: hash_a,
+            user_b_hash: hash_b,
+            status: 2u8,    
             since: block.height
         };
         
@@ -617,27 +600,26 @@ program shadowsphere_social12.aleo {
 
     async transition remove_friend(public friend: address) -> Future {
         let caller: address = self.caller;
+        let caller_hash: field = BHP256::hash_to_field(caller as field);
+        let friend_hash: field = BHP256::hash_to_field(friend as field);
                 
-        return finalize_remove_friend(caller, friend);
+        return finalize_remove_friend(caller_hash, friend_hash);
     }
 
-    async function finalize_remove_friend(caller: address, friend: address) {
-        // Get caller's username
-        let profile: UserProfile = Mapping::get(users, caller);
+    async function finalize_remove_friend(caller_hash: field, friend_hash: field) {
+        let profile: UserProfile = Mapping::get(users, caller_hash);
         assert(profile.is_registered == true);
         
-        // Create consistent key
-        let key: field = BHP256::hash_to_field(caller as field + friend as field);
+        // Using ternary operator for ordering
+        let hash_a: field = caller_hash < friend_hash ? caller_hash : friend_hash;
+        let hash_b: field = caller_hash < friend_hash ? friend_hash : caller_hash;
+        let key: field = BHP256::hash_to_field(hash_a + hash_b);
         
-        // Check if relationship exists
         let existing: Friendship = Mapping::get(friendships, key);
         assert(existing.status != 0u8);
         
-        // Remove the mapping entry
         Mapping::remove(friendships, key);
     }
-
-
 
     // ==============================================
     // VERIFICATION
@@ -645,15 +627,15 @@ program shadowsphere_social12.aleo {
 
     async transition verify_user() -> Future {
         let caller: address = self.caller;
-        return finalize_verify_user(caller);
+        let caller_hash: field = BHP256::hash_to_field(caller as field);
+        return finalize_verify_user(caller_hash);
     }
 
-    async function finalize_verify_user(user: address) {
-        let user_data: UserProfile = Mapping::get(users, user);
+    async function finalize_verify_user(user_hash: field) {
+        let user_data: UserProfile = Mapping::get(users, user_hash);
         assert(user_data.reputation >= VERIFICATION_THRESHOLD);
         
-        Mapping::set(users, user, UserProfile {
-            public_key: user_data.public_key,
+        Mapping::set(users, user_hash, UserProfile {
             reputation: user_data.reputation,
             created_at: user_data.created_at,
             is_verified: true,
@@ -661,7 +643,6 @@ program shadowsphere_social12.aleo {
             balance: user_data.balance
         });
     }
-
 
     // ==============================================
     // ADMIN FUNCTIONS
@@ -672,12 +653,11 @@ program shadowsphere_social12.aleo {
         assert(caller == ADMIN);
         
         let withdraw_future: Future = test_usdcx_stablecoin.aleo/transfer_public(ADMIN, amount);
-        return finalize_admin_withdraw(caller, amount, withdraw_future);
+        return finalize_admin_withdraw(withdraw_future);
     }
 
-    async function finalize_admin_withdraw(caller: address, amount: u128, withdraw_future: Future) {
+    async function finalize_admin_withdraw(withdraw_future: Future) {
         withdraw_future.await();
-
     }
 
     transition is_admin(public user_address: address) -> bool {
